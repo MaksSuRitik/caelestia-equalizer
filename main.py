@@ -386,7 +386,8 @@ if __name__ == "__main__":
     engine.rootContext().setContextProperty("Scaler", mock_scaler)
     engine.rootContext().setContextProperty("Caching", mock_caching)
 
-    qml_file = BASE_DIR / "ui" / "main.qml"
+   # Загружаем главный файл из пользовательского кэша, куда мы его только что сгенерировали
+    qml_file = Path.home() / ".cache" / "caelestia-equalizer" / "ui" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
 
     if not engine.rootObjects():
