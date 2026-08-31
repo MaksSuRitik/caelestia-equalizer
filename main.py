@@ -333,22 +333,23 @@ Window {
 """)
 
 if __name__ == "__main__":
-    # Проверяем, запущен ли уже экземпляр приложения через PID-файл
     pid_file = Path.home() / ".cache" / "caelestia-equalizer" / "app.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
 
     if pid_file.exists():
         try:
             old_pid = int(pid_file.read_text().strip())
-            # Проверяем, существует ли реально процесс с таким PID (сигнал 0 не убивает процесс, а только проверяет)
+            # Проверяем, жив ли старый процесс
             os.kill(old_pid, 0)
-            # Если процесс живой — значит, приложение уже открыто, просто выходим
+            # ЕСЛИ ЖИВ: значит, приложение уже открыто. Убиваем его, чтобы сработал эффект закрытия!
+            os.kill(old_pid, 15) # 15 - мягкое завершение (SIGTERM)
+            pid_file.unlink(missing_ok=True)
             sys.exit(0)
         except OSError:
-            # Если процесса с таким ID больше нет (старый файл остался), идем дальше
-            pass
+            # Если процесса уже нет, просто удаляем битый pid-файл и продолжаем запуск
+            pid_file.unlink(missing_ok=True)
 
-    # Записываем текущий PID запущенного приложения
+    # Записываем PID текущего запущенного процесса
     pid_file.write_text(str(os.getpid()))
 
     try:
