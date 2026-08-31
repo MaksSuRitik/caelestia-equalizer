@@ -414,6 +414,5 @@ if __name__ == "__main__":
         sys.exit(app.exec())
         
     finally:
-        # При любом выходе из приложения гарантированно удаляем PID-файл
         if pid_file.exists():
-            pid_file.unlink()
+            pid_file.unlink(missing_ok=True)
