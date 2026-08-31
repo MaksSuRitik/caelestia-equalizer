@@ -281,37 +281,18 @@ def setup_app():
     UI_DIR = BASE_DIR / "ui"
     MEDIA_DIR = BASE_DIR / "media"
 
-    UI_DIR.mkdir(exist_ok=True)
-    MEDIA_DIR.mkdir(exist_ok=True)
+    # Убеждаемся, что папки существуют (если они в пользователе, хотя в /usr/share они уже там)
+    UI_DIR.mkdir(exist_ok=True, parents=True)
+    MEDIA_DIR.mkdir(exist_ok=True, parents=True)
 
-    downloads = Path.home() / "Загрузки"
-    art_fetch = equalizer = music_qml = None
+    # Убираем весь блок с поиском в Загрузках, так как файлы уже лежат внутри пакета!
 
-    for path in downloads.rglob("*"):
-        if not path.is_file(): continue
-        if path.name == "art_fetch.sh": art_fetch = path
-        elif path.name == "equalizer.sh": equalizer = path
-        elif path.name == "MusicPopup.qml": music_qml = path
-        if art_fetch and equalizer and music_qml: break
+    music_qml = MEDIA_DIR.parent / "ui" / "MusicPopup.qml" # Или просто проверяем наличие
 
-    if art_fetch:
-        script_content = art_fetch.read_text(encoding='utf-8')
-        script_content = re.sub(r'source.*caching\.sh".*\n', '', script_content)
-        script_content = re.sub(r'qs_ensure_cache.*\n', '', script_content)
-        script_content = script_content.replace('$QS_RUN_MUSIC', str(MEDIA_DIR))
-        (MEDIA_DIR / "art_fetch.sh").write_text(script_content, encoding='utf-8')
-        os.chmod(MEDIA_DIR / "art_fetch.sh", 0o755)
-
-    if equalizer:
-        script_content = equalizer.read_text(encoding='utf-8')
-        script_content = re.sub(r'source.*caching\.sh".*\n', '', script_content)
-        script_content = re.sub(r'qs_ensure_cache.*\n', '', script_content)
-        script_content = script_content.replace('$QS_RUN_MUSIC', str(MEDIA_DIR))
-        (MEDIA_DIR / "equalizer.sh").write_text(script_content, encoding='utf-8')
-        os.chmod(MEDIA_DIR / "equalizer.sh", 0o755)
-
-    if music_qml:
-        qml_content = music_qml.read_text(encoding='utf-8')
+    # Если нужно обработать MusicPopup.qml на лету (если он есть):
+    music_qml_path = BASE_DIR / "ui" / "MusicPopup.qml"
+    if music_qml_path.exists():
+        qml_content = music_qml_path.read_text(encoding='utf-8')
         qml_content = re.sub(r'import Quickshell.*\n', '', qml_content)
         qml_content = re.sub(r'import "\.\./.*"\n', '', qml_content)
         qml_content = qml_content.replace('import Quickshell.Io', '')
@@ -321,8 +302,10 @@ def setup_app():
         qml_content = replace_block(qml_content, "function execCmd(cmdStr) {", "function execCmd(cmdStr) { SysBridge.exec_cmd(cmdStr); }\n")
         (UI_DIR / "MusicPopup.qml").write_text(qml_content, encoding='utf-8')
 
+    # Обязательные заглушки для QML компонентов, если они генерируются кодом:
     (UI_DIR / "StdioCollector.qml").write_text("import QtQuick\n\nQtObject {\n    property string text: \"\"\n    signal streamFinished()\n}\n")
     (UI_DIR / "Process.qml").write_text("import QtQuick\n\nItem {\n    property var command: []\n    property bool running: false\n    property var stdout: null\n    signal exited(int exitCode)\n    onRunningChanged: {\n        if(running) {\n            let res = SysBridge.exec_cmd_list(command);\n            if(stdout) { stdout.text = res; stdout.streamFinished(); }\n            running = false;\n            exited(0);\n        }\n    }\n}\n")
+    # ... (остальные заглушки кнопок оставляем без изменений)
     (UI_DIR / "ClickButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonText: \"Btn\"\n    property real textFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonText\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: textFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n    }\n}\n")
     (UI_DIR / "IconButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonIcon: \"X\"\n    property real iconFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property real iconOffsetY: 0\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonIcon\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: iconFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n        y: iconOffsetY\n    }\n}\n")
     (UI_DIR / "Dropdown.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nComboBox {\n    property real fontPixelSize: 12\n    property real iconSize: 12\n    property color accentColor: \"gray\"\n    property color baseColor: \"black\"\n    property color hoverColor: \"gray\"\n    property color dropdownColor: \"black\"\n    property color borderColor: \"gray\"\n    property color textColor: \"white\"\n    property color activeTextColor: \"white\"\n    property real cornerRadius: 5\n    property var options: []\n    model: options\n    signal valueChanged(int index, string value)\n    onActivated: function(index) {\n        valueChanged(index, textAt(index))\n    }\n}\n")
