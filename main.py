@@ -278,19 +278,18 @@ def replace_block(text, header, replacement):
 
 def setup_app():
     BASE_DIR = Path(__file__).parent.absolute()
-    UI_DIR = BASE_DIR / "ui"
-    MEDIA_DIR = BASE_DIR / "media"
+    
+    # ИСПРАВЛЕНИЕ: Перенаправляем запись UI-файлов во временную папку пользователя, 
+    # так как /доступная по умолчанию /usrдоступна только для чтения!
+    UI_DIR = Path.home() / ".cache" / "caelestia-equalizer" / "ui"
+    MEDIA_DIR = BASE_DIR / "media" # Медиа оставляем как есть (они читаются из пакета)
 
-    # Убеждаемся, что папки существуют (если они в пользователе, хотя в /usr/share они уже там)
+    # Убеждаемся, что пользовательская папка для UI существует
     UI_DIR.mkdir(exist_ok=True, parents=True)
-    MEDIA_DIR.mkdir(exist_ok=True, parents=True)
 
-    # Убираем весь блок с поиском в Загрузках, так как файлы уже лежат внутри пакета!
-
-    music_qml = MEDIA_DIR.parent / "ui" / "MusicPopup.qml" # Или просто проверяем наличие
-
-    # Если нужно обработать MusicPopup.qml на лету (если он есть):
+    # Путь к исходному MusicPopup.qml берем из системной директории пакета (BASE_DIR)
     music_qml_path = BASE_DIR / "ui" / "MusicPopup.qml"
+    
     if music_qml_path.exists():
         qml_content = music_qml_path.read_text(encoding='utf-8')
         qml_content = re.sub(r'import Quickshell.*\n', '', qml_content)
@@ -302,14 +301,13 @@ def setup_app():
         qml_content = replace_block(qml_content, "function execCmd(cmdStr) {", "function execCmd(cmdStr) { SysBridge.exec_cmd(cmdStr); }\n")
         (UI_DIR / "MusicPopup.qml").write_text(qml_content, encoding='utf-8')
 
-    # Обязательные заглушки для QML компонентов, если они генерируются кодом:
+    # Обязательные заглушки для QML компонентов (теперь запишутся в ~/.cache/...)
     (UI_DIR / "StdioCollector.qml").write_text("import QtQuick\n\nQtObject {\n    property string text: \"\"\n    signal streamFinished()\n}\n")
     (UI_DIR / "Process.qml").write_text("import QtQuick\n\nItem {\n    property var command: []\n    property bool running: false\n    property var stdout: null\n    signal exited(int exitCode)\n    onRunningChanged: {\n        if(running) {\n            let res = SysBridge.exec_cmd_list(command);\n            if(stdout) { stdout.text = res; stdout.streamFinished(); }\n            running = false;\n            exited(0);\n        }\n    }\n}\n")
-    # ... (остальные заглушки кнопок оставляем без изменений)
     (UI_DIR / "ClickButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonText: \"Btn\"\n    property real textFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonText\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: textFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n    }\n}\n")
     (UI_DIR / "IconButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonIcon: \"X\"\n    property real iconFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property real iconOffsetY: 0\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonIcon\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: iconFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n        y: iconOffsetY\n    }\n}\n")
     (UI_DIR / "Dropdown.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nComboBox {\n    property real fontPixelSize: 12\n    property real iconSize: 12\n    property color accentColor: \"gray\"\n    property color baseColor: \"black\"\n    property color hoverColor: \"gray\"\n    property color dropdownColor: \"black\"\n    property color borderColor: \"gray\"\n    property color textColor: \"white\"\n    property color activeTextColor: \"white\"\n    property real cornerRadius: 5\n    property var options: []\n    model: options\n    signal valueChanged(int index, string value)\n    onActivated: function(index) {\n        valueChanged(index, textAt(index))\n    }\n}\n")
-    (UI_DIR / "Draggable.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nSlider {\n    property color backgroundColor: \"gray\"\n    property color accentColor: \"blue\"\n    property color gradColor1: \"blue\"\n    property color gradColor2: \"cyan\"\n    property color gradColor3: \"cyan\"\n    property real cornerRadius: 5\n    property real handleSize: 10\n    property color handleColor: \"white\"\n    property color handleHoverColor: \"white\"\n    property color handleDragColor: \"white\"\n    property color handleBorderColor: \"black\"\n    property bool showValueBubble: false\n    property bool showTooltip: false\n    property var valueFormatter: function(v) { return v; }\n    property bool isDragging: pressed\n}\n")
+    (UI_DIR / "Draggable.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nSlider {\n    property color backgroundColor: \"gray\"\n    property color accentColor: \"blue\"\n    property color gradColor1: \"blue\"\n    property color gradColor2: "cyan"\n    property color gradColor3: \"cyan\"\n    property real cornerRadius: 5\n    property real handleSize: 10\n    property color handleColor: \"white\"\n    property color handleHoverColor: \"white\"\n    property color handleDragColor: \"white\"\n    property color handleBorderColor: \"black\"\n    property bool showValueBubble: false\n    property bool showTooltip: false\n    property var valueFormatter: function(v) { return v; }\n    property bool isDragging: pressed\n}\n")
 
     (UI_DIR / "main.qml").write_text("""import QtQuick
 import QtQuick.Window
