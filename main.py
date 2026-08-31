@@ -333,64 +333,86 @@ Window {
 """)
 
 if __name__ == "__main__":
-    setup_app()
-    app = QGuiApplication(sys.argv)
-    engine = QQmlApplicationEngine()
+    # Проверяем, запущен ли уже экземпляр приложения через PID-файл
+    pid_file = Path.home() / ".cache" / "caelestia-equalizer" / "app.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
 
-    BASE_DIR = Path(__file__).parent.absolute()
-    CONFIG_DIR = Path.home() / ".config" / "music-standalone-app"
-
-    pos_x_file = CONFIG_DIR / ".saved_pos_x"
-    pos_y_file = CONFIG_DIR / ".saved_pos_y"
-    x, y = 20, 60
-    if pos_x_file.exists() and pos_y_file.exists():
+    if pid_file.exists():
         try:
-            x = int(pos_x_file.read_text().strip())
-            y = int(pos_y_file.read_text().strip())
-        except Exception:
+            old_pid = int(pid_file.read_text().strip())
+            # Проверяем, существует ли реально процесс с таким PID (сигнал 0 не убивает процесс, а только проверяет)
+            os.kill(old_pid, 0)
+            # Если процесс живой — значит, приложение уже открыто, просто выходим
+            sys.exit(0)
+        except OSError:
+            # Если процесса с таким ID больше нет (старый файл остался), идем дальше
             pass
 
-    lua_rule = f"hl.window_rule({{ match = {{ title = 'Standalone Music App' }}, move = {{ '{x}', '{y}' }} }})"
-    subprocess.run(["hyprctl", "eval", lua_rule])
+    # Записываем текущий PID запущенного приложения
+    pid_file.write_text(str(os.getpid()))
 
-    sys_bridge = SysBridge(app)
-    mock_mpris_ctrl = MockMprisController(app)
-    mock_mpris = MockMpris(mock_mpris_ctrl, app)
-    mock_theme = MockTheme(app)
-    mock_cava = MockCava(mock_mpris_ctrl.activePlayer, app)
-    mock_sounds = MockSounds(app)
-    mock_i18n = MockI18n(app)
-    mock_scaler = MockScaler(app)
-    mock_caching = MockCaching(app)
+    try:
+        setup_app()
+        app = QGuiApplication(sys.argv)
+        engine = QQmlApplicationEngine()
 
-    mpris_timer = QTimer(app)
-    mpris_timer.timeout.connect(mock_mpris_ctrl.activePlayer.fetch_data)
-    mpris_timer.start(1000)
+        BASE_DIR = Path(__file__).parent.absolute()
+        CONFIG_DIR = Path.home() / ".config" / "music-standalone-app"
 
-    cava_timer = QTimer(app)
-    cava_timer.timeout.connect(mock_cava.update_fake_cava)
-    cava_timer.start(60)
+        pos_x_file = CONFIG_DIR / ".saved_pos_x"
+        pos_y_file = CONFIG_DIR / ".saved_pos_y"
+        x, y = 20, 60
+        if pos_x_file.exists() and pos_y_file.exists():
+            try:
+                x = int(pos_x_file.read_text().strip())
+                y = int(pos_y_file.read_text().strip())
+            except Exception:
+                pass
 
-    # Таймер теперь корректно привязывается к заголовку окна и следит за ним
-    save_timer = QTimer(app)
-    save_timer.timeout.connect(sys_bridge.save_hyprland_position)
-    save_timer.start(2000)
+        lua_rule = f"hl.window_rule({{ match = {{ title = 'Standalone Music App' }}, move = {{ '{x}', '{y}' }} }})"
+        subprocess.run(["hyprctl", "eval", lua_rule])
 
-    engine.rootContext().setContextProperty("SysBridge", sys_bridge)
-    engine.rootContext().setContextProperty("MprisController", mock_mpris_ctrl)
-    engine.rootContext().setContextProperty("Mpris", mock_mpris)
-    engine.rootContext().setContextProperty("ThemeBackend", mock_theme)
-    engine.rootContext().setContextProperty("Cava", mock_cava)
-    engine.rootContext().setContextProperty("Sounds", mock_sounds)
-    engine.rootContext().setContextProperty("I18n", mock_i18n)
-    engine.rootContext().setContextProperty("Scaler", mock_scaler)
-    engine.rootContext().setContextProperty("Caching", mock_caching)
+        sys_bridge = SysBridge(app)
+        mock_mpris_ctrl = MockMprisController(app)
+        mock_mpris = MockMpris(mock_mpris_ctrl, app)
+        mock_theme = MockTheme(app)
+        mock_cava = MockCava(mock_mpris_ctrl.activePlayer, app)
+        mock_sounds = MockSounds(app)
+        mock_i18n = MockI18n(app)
+        mock_scaler = MockScaler(app)
+        mock_caching = MockCaching(app)
 
-   # Загружаем главный файл из пользовательского кэша, куда мы его только что сгенерировали
-    qml_file = Path.home() / ".cache" / "caelestia-equalizer" / "ui" / "main.qml"
-    engine.load(QUrl.fromLocalFile(str(qml_file)))
+        mpris_timer = QTimer(app)
+        mpris_timer.timeout.connect(mock_mpris_ctrl.activePlayer.fetch_data)
+        mpris_timer.start(1000)
 
-    if not engine.rootObjects():
-        sys.exit(-1)
+        cava_timer = QTimer(app)
+        cava_timer.timeout.connect(mock_cava.update_fake_cava)
+        cava_timer.start(60)
 
-    sys.exit(app.exec())
+        save_timer = QTimer(app)
+        save_timer.timeout.connect(sys_bridge.save_hyprland_position)
+        save_timer.start(2000)
+
+        engine.rootContext().setContextProperty("SysBridge", sys_bridge)
+        engine.rootContext().setContextProperty("MprisController", mock_mpris_ctrl)
+        engine.rootContext().setContextProperty("Mpris", mock_mpris)
+        engine.rootContext().setContextProperty("ThemeBackend", mock_theme)
+        engine.rootContext().setContextProperty("Cava", mock_cava)
+        engine.rootContext().setContextProperty("Sounds", mock_sounds)
+        engine.rootContext().setContextProperty("I18n", mock_i18n)
+        engine.rootContext().setContextProperty("Scaler", mock_scaler)
+        engine.rootContext().setContextProperty("Caching", mock_caching)
+
+        qml_file = Path.home() / ".cache" / "caelestia-equalizer" / "ui" / "main.qml"
+        engine.load(QUrl.fromLocalFile(str(qml_file)))
+
+        if not engine.rootObjects():
+            sys.exit(-1)
+
+        sys.exit(app.exec())
+        
+    finally:
+        # При любом выходе из приложения гарантированно удаляем PID-файл
+        if pid_file.exists():
+            pid_file.unlink()
