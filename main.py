@@ -5,10 +5,11 @@ import subprocess
 import re
 import random
 import json
+import signal
 from pathlib import Path
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtProperty, QUrl, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtProperty, QUrl, pyqtSignal, QTimer, QMetaObject
 
 class SysBridge(QObject):
     def __init__(self, parent=None):
@@ -279,15 +280,12 @@ def replace_block(text, header, replacement):
 def setup_app():
     BASE_DIR = Path(__file__).parent.absolute()
     
-    # ИСПРАВЛЕНИЕ: Перенаправляем запись UI-файлов во временную папку пользователя, 
-    # так как /доступная по умолчанию /usrдоступна только для чтения!
+    # Перенаправляем запись UI-файлов во временную папку пользователя
     UI_DIR = Path.home() / ".cache" / "caelestia-equalizer" / "ui"
-    MEDIA_DIR = BASE_DIR / "media" # Медиа оставляем как есть (они читаются из пакета)
+    MEDIA_DIR = BASE_DIR / "media"
 
-    # Убеждаемся, что пользовательская папка для UI существует
     UI_DIR.mkdir(exist_ok=True, parents=True)
 
-    # Путь к исходному MusicPopup.qml берем из системной директории пакета (BASE_DIR)
     music_qml_path = BASE_DIR / "ui" / "MusicPopup.qml"
     
     if music_qml_path.exists():
@@ -301,7 +299,6 @@ def setup_app():
         qml_content = replace_block(qml_content, "function execCmd(cmdStr) {", "function execCmd(cmdStr) { SysBridge.exec_cmd(cmdStr); }\n")
         (UI_DIR / "MusicPopup.qml").write_text(qml_content, encoding='utf-8')
 
-    # Обязательные заглушки для QML компонентов (теперь запишутся в ~/.cache/...)
     (UI_DIR / "StdioCollector.qml").write_text("import QtQuick\n\nQtObject {\n    property string text: \"\"\n    signal streamFinished()\n}\n")
     (UI_DIR / "Process.qml").write_text("import QtQuick\n\nItem {\n    property var command: []\n    property bool running: false\n    property var stdout: null\n    signal exited(int exitCode)\n    onRunningChanged: {\n        if(running) {\n            let res = SysBridge.exec_cmd_list(command);\n            if(stdout) { stdout.text = res; stdout.streamFinished(); }\n            running = false;\n            exited(0);\n        }\n    }\n}\n")
     (UI_DIR / "ClickButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonText: \"Btn\"\n    property real textFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonText\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: textFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n    }\n}\n")
@@ -309,6 +306,7 @@ def setup_app():
     (UI_DIR / "Dropdown.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nComboBox {\n    property real fontPixelSize: 12\n    property real iconSize: 12\n    property color accentColor: \"gray\"\n    property color baseColor: \"black\"\n    property color hoverColor: \"gray\"\n    property color dropdownColor: \"black\"\n    property color borderColor: \"gray\"\n    property color textColor: \"white\"\n    property color activeTextColor: \"white\"\n    property real cornerRadius: 5\n    property var options: []\n    model: options\n    signal valueChanged(int index, string value)\n    onActivated: function(index) {\n        valueChanged(index, textAt(index))\n    }\n}\n")
     (UI_DIR / "Draggable.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nSlider {\n    property color backgroundColor: \"gray\"\n    property color accentColor: \"blue\"\n    property color gradColor1: \"blue\"\n    property color gradColor2: 'cyan'\n    property color gradColor3: 'cyan'\n    property real cornerRadius: 5\n    property real handleSize: 10\n    property color handleColor: \"white\"\n    property color handleHoverColor: \"white\"\n    property color handleDragColor: \"white\"\n    property color handleBorderColor: \"black\"\n    property bool showValueBubble: false\n    property bool showTooltip: false\n    property var valueFormatter: function(v) { return v; }\n    property bool isDragging: pressed\n}\n")
 
+    # Переписанный main.qml с контейнером для анимации
     (UI_DIR / "main.qml").write_text("""import QtQuick
 import QtQuick.Window
 
@@ -321,13 +319,52 @@ Window {
     maximumWidth: 600
     minimumHeight: 579
     maximumHeight: 579
-    color: ThemeBackend.base
+    color: "transparent" // Делаем само окно прозрачным
     title: "Standalone Music App"
     flags: Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
-    MusicPopup {
-        anchors.fill: parent
-        anchors.margins: 10
+    // Обертка, которая будет ездить вверх-вниз
+    Item {
+        id: mainPanel
+        width: parent.width
+        height: parent.height
+        y: mainWindow.height // На старте прячем внизу
+
+        // Фон интерфейса
+        Rectangle {
+            anchors.fill: parent
+            color: ThemeBackend.base
+            radius: ThemeBackend.borderRadius
+        }
+
+        // Твой контент
+        MusicPopup {
+            anchors.fill: parent
+            anchors.margins: 10
+        }
+
+        // Анимация при запуске (вверх)
+        NumberAnimation on y {
+            to: 0
+            duration: 400
+            easing.type: Easing.OutBack
+        }
+
+        // Анимация при закрытии (вниз)
+        NumberAnimation {
+            id: closeAnim
+            target: mainPanel
+            property: "y"
+            to: mainWindow.height
+            duration: 300
+            easing.type: Easing.InBack
+            onFinished: Qt.quit() // Убиваем прогу, когда анимация закончилась
+        }
+    }
+
+    // Эта функция вызывается из питона
+    function closeApp() {
+        closeAnim.start()
     }
 }
 """)
@@ -339,17 +376,12 @@ if __name__ == "__main__":
     if pid_file.exists():
         try:
             old_pid = int(pid_file.read_text().strip())
-            # Проверяем, жив ли старый процесс
             os.kill(old_pid, 0)
-            # ЕСЛИ ЖИВ: значит, приложение уже открыто. Убиваем его, чтобы сработал эффект закрытия!
-            os.kill(old_pid, 15) # 15 - мягкое завершение (SIGTERM)
-            pid_file.unlink(missing_ok=True)
+            os.kill(old_pid, signal.SIGTERM) 
             sys.exit(0)
         except OSError:
-            # Если процесса уже нет, просто удаляем битый pid-файл и продолжаем запуск
             pid_file.unlink(missing_ok=True)
 
-    # Записываем PID текущего запущенного процесса
     pid_file.write_text(str(os.getpid()))
 
     try:
@@ -410,6 +442,22 @@ if __name__ == "__main__":
 
         if not engine.rootObjects():
             sys.exit(-1)
+
+        # Функция для активации QML-анимации
+        def trigger_qml_close():
+            root_obj = engine.rootObjects()[0]
+            QMetaObject.invokeMethod(root_obj, "closeApp")
+
+        # Обработчик сигнала
+        def sigterm_handler(signum, frame):
+            QTimer.singleShot(0, trigger_qml_close)
+
+        signal.signal(signal.SIGTERM, sigterm_handler)
+
+        # Чтобы питон не спал и мог перехватывать системные сигналы
+        sig_timer = QTimer(app)
+        sig_timer.timeout.connect(lambda: None)
+        sig_timer.start(200)
 
         sys.exit(app.exec())
         
