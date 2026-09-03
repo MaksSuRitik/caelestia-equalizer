@@ -2,22 +2,30 @@ import QtQuick
 import QtQuick.Controls
 
 Button {
-    property string buttonText: "Btn"
+    id: control
+    property string buttonText: ""
     property real textFontSize: 12
-    property color accentColor: "#555"
-    property color textColor: "white"
-    property real cornerRadius: 4
-    property bool isHoveredOrHighlighted: hovered || pressed
-    text: buttonText
+    property color accentColor: ThemeBackend.surface0 || "#313244"
+    property color textColor: ThemeBackend.text || "#cdd6f4"
+    property real cornerRadius: 8
+    property real horizontalPadding: 12
+    property bool isHoveredOrHighlighted: control.hovered || control.pressed
+
+    implicitWidth: contentItem.implicitWidth + (horizontalPadding * 2)
+    implicitHeight: 32
+
     background: Rectangle {
-        color: accentColor
+        color: control.pressed ? Qt.darker(accentColor, 1.2) : (control.hovered ? Qt.lighter(accentColor, 1.2) : accentColor)
         radius: cornerRadius
+        Behavior on color { ColorAnimation { duration: 150 } }
     }
     contentItem: Text {
-        text: parent.text
-        color: textColor
-        font.pixelSize: textFontSize
+        text: control.buttonText
+        color: control.textColor
+        font.pixelSize: control.textFontSize
+        font.family: ThemeBackend.fontFamily
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
+        Behavior on color { ColorAnimation { duration: 150 } }
     }
 }
