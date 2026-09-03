@@ -8,8 +8,8 @@ Slider {
     property color gradColor1: ThemeBackend.blue || "#89b4fa"
     property color gradColor2: ThemeBackend.mauve || "#cba6f7"
     property color gradColor3: ThemeBackend.mauve || "#cba6f7"
-    property real cornerRadius: 6
-    property real handleSize: 14
+    property real cornerRadius: 8
+    property real handleSize: 18
     property color handleColor: ThemeBackend.text || "#cdd6f4"
     property color handleHoverColor: Qt.lighter(accentColor, 1.15)
     property color handleDragColor: Qt.lighter(accentColor, 1.30)
@@ -23,7 +23,7 @@ Slider {
         x: control.leftPadding
         y: control.topPadding + control.availableHeight / 2 - height / 2
         implicitWidth: 200
-        implicitHeight: 6
+        implicitHeight: 10
         width: control.availableWidth
         height: implicitHeight
         radius: cornerRadius
