@@ -216,27 +216,63 @@ class MockTheme(QObject):
     @pyqtProperty(str, notify=themeChanged)
     def fontFamily(self): return "sans-serif"
 
-class MockCava(QObject):
+class RealCava(QObject):
     levelsChanged = pyqtSignal()
+    
     def __init__(self, player, parent=None):
         super().__init__(parent)
-        self._levels = [0.0]*60
+        self._levels = [0.0] * 60
         self.player = player
+        self._cava_proc = None
+        self._thread = None
+        self._active = False
+        self.start_cava()
 
     @pyqtProperty(list, notify=levelsChanged)
-    def barLevels(self): return self._levels
+    def barLevels(self): 
+        return self._levels
 
-    def update_fake_cava(self):
-        if self.player.isPlaying:
-            self._levels = [random.uniform(0.01, 0.95) for _ in range(60)]
-        else:
-            self._levels = [0.0] * 60
-        self.levelsChanged.emit()
+    def start_cava(self):
+        cava_conf = Path.home() / ".config" / "music-standalone-app" / "cava.conf"
+        cava_conf.parent.mkdir(parents=True, exist_ok=True)
+        cava_conf.write_text("[general]\nbars = 60\n[output]\nmethod = raw\ndata_format = ascii\nascii_max_range = 100\n")
+
+        try:
+            self._cava_proc = subprocess.Popen(
+                ["cava", "-p", str(cava_conf)],
+                stdout=subprocess.PIPE,
+                text=True
+            )
+            self._thread = threading.Thread(target=self._read_cava, daemon=True)
+            self._thread.start()
+        except FileNotFoundError:
+            print("Cava не установлена!")
+
+    def _read_cava(self):
+        while True:
+            if not self._cava_proc: break
+            line = self._cava_proc.stdout.readline()
+            if not line: break
+            
+            if self._active:
+                try:
+                    vals = [float(x) / 100.0 for x in line.strip().split(';') if x]
+                    if len(vals) == 60:
+                        self._levels = vals
+                        self.levelsChanged.emit()
+                except ValueError:
+                    pass
+            else:
+                self._levels = [0.0] * 60
+                self.levelsChanged.emit()
 
     @pyqtSlot()
-    def registerConsumer(self): pass
+    def registerConsumer(self): 
+        self._active = True
+        
     @pyqtSlot()
-    def unregisterConsumer(self): pass
+    def unregisterConsumer(self): 
+        self._active = False
 
 class MockSounds(QObject):
     def __init__(self, parent=None): super().__init__(parent)
