@@ -8,8 +8,10 @@ Button {
     property color accentColor: ThemeBackend.surface0 || "#313244"
     property color textColor: ThemeBackend.text || "#cdd6f4"
     property real cornerRadius: 8
-    property real horizontalPadding: 12
     property bool isHoveredOrHighlighted: control.hovered || control.pressed
+
+    // Убрали "property real", просто задаем значение встроенному свойству:
+    horizontalPadding: 12
 
     implicitWidth: contentItem.implicitWidth + (horizontalPadding * 2)
     implicitHeight: 32
