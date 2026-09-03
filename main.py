@@ -337,10 +337,11 @@ def setup_app():
 
     (UI_DIR / "StdioCollector.qml").write_text("import QtQuick\n\nQtObject {\n    property string text: \"\"\n    signal streamFinished()\n}\n")
     (UI_DIR / "Process.qml").write_text("import QtQuick\n\nItem {\n    property var command: []\n    property bool running: false\n    property var stdout: null\n    signal exited(int exitCode)\n    onRunningChanged: {\n        if(running) {\n            let res = SysBridge.exec_cmd_list(command);\n            if(stdout) { stdout.text = res; stdout.streamFinished(); }\n            running = false;\n            exited(0);\n        }\n    }\n}\n")
-    (UI_DIR / "ClickButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonText: \"Btn\"\n    property real textFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonText\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: textFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n    }\n}\n")
-    (UI_DIR / "IconButton.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nButton {\n    property string buttonIcon: \"X\"\n    property real iconFontSize: 12\n    property color accentColor: \"#555\"\n    property color textColor: \"white\"\n    property real cornerRadius: 4\n    property real iconOffsetY: 0\n    property bool isHoveredOrHighlighted: hovered || pressed\n    text: buttonIcon\n    background: Rectangle {\n        color: accentColor\n        radius: cornerRadius\n    }\n    contentItem: Text {\n        text: parent.text\n        color: textColor\n        font.pixelSize: iconFontSize\n        horizontalAlignment: Text.AlignHCenter\n        verticalAlignment: Text.AlignVCenter\n        y: iconOffsetY\n    }\n}\n")
-    (UI_DIR / "Dropdown.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nComboBox {\n    property real fontPixelSize: 12\n    property real iconSize: 12\n    property color accentColor: \"gray\"\n    property color baseColor: \"black\"\n    property color hoverColor: \"gray\"\n    property color dropdownColor: \"black\"\n    property color borderColor: \"gray\"\n    property color textColor: \"white\"\n    property color activeTextColor: \"white\"\n    property real cornerRadius: 5\n    property var options: []\n    model: options\n    signal valueChanged(int index, string value)\n    onActivated: function(index) {\n        valueChanged(index, textAt(index))\n    }\n}\n")
-    (UI_DIR / "Draggable.qml").write_text("import QtQuick\nimport QtQuick.Controls\n\nSlider {\n    property color backgroundColor: \"gray\"\n    property color accentColor: \"blue\"\n    property color gradColor1: \"blue\"\n    property color gradColor2: 'cyan'\n    property color gradColor3: 'cyan'\n    property real cornerRadius: 5\n    property real handleSize: 10\n    property color handleColor: \"white\"\n    property color handleHoverColor: \"white\"\n    property color handleDragColor: \"white\"\n    property color handleBorderColor: \"black\"\n    property bool showValueBubble: false\n    property bool showTooltip: false\n    property var valueFormatter: function(v) { return v; }\n    property bool isDragging: pressed\n}\n")
+    # Просто копируем файлы, если они есть в папке ui
+    for qml_file in ["ClickButton.qml", "IconButton.qml", "Dropdown.qml", "Draggable.qml"]:
+        src_file = BASE_DIR / "ui" / qml_file
+        if src_file.exists():
+            shutil.copy(src_file, UI_DIR / qml_file)
 
     # Переписанный main.qml с контейнером для анимации
     (UI_DIR / "main.qml").write_text("""import QtQuick
@@ -445,7 +446,7 @@ if __name__ == "__main__":
         mock_mpris_ctrl = MockMprisController(app)
         mock_mpris = MockMpris(mock_mpris_ctrl, app)
         mock_theme = MockTheme(app)
-        mock_cava = MockCava(mock_mpris_ctrl.activePlayer, app)
+        mock_cava = RealCava(mock_mpris_ctrl.activePlayer, app) # Исправлено на RealCava
         mock_sounds = MockSounds(app)
         mock_i18n = MockI18n(app)
         mock_scaler = MockScaler(app)
@@ -455,9 +456,7 @@ if __name__ == "__main__":
         mpris_timer.timeout.connect(mock_mpris_ctrl.activePlayer.fetch_data)
         mpris_timer.start(1000)
 
-        cava_timer = QTimer(app)
-        cava_timer.timeout.connect(mock_cava.update_fake_cava)
-        cava_timer.start(60)
+        # cava_timer полностью удаляем, так как RealCava работает в отдельном потоке
 
         save_timer = QTimer(app)
         save_timer.timeout.connect(sys_bridge.save_hyprland_position)
