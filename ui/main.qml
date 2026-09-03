@@ -10,7 +10,7 @@ Window {
     maximumWidth: 600
     minimumHeight: 579
     maximumHeight: 579
-    color: ThemeBackend.base
+    color: "transparent"
     title: "Standalone Music App"
     flags: Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
