@@ -6,6 +6,7 @@ import re
 import random
 import json
 import signal
+import threading
 from pathlib import Path
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtQml import QQmlApplicationEngine
@@ -32,7 +33,6 @@ class SysBridge(QObject):
 
     @pyqtSlot()
     def save_hyprland_position(self):
-        # Ищем окно по title, так как Wayland часто не совпадает с PID питона
         try:
             output = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True).stdout
             if not output: return
@@ -50,7 +50,6 @@ class SysBridge(QObject):
                     old_x = int(fx.read_text().strip()) if fx.exists() else -1
                     old_y = int(fy.read_text().strip()) if fy.exists() else -1
 
-                    # Перезаписываем только если окно реально сдвинули
                     if old_x != int(new_x) or old_y != int(new_y):
                         fx.write_text(str(int(new_x)))
                         fy.write_text(str(int(new_y)))
@@ -118,10 +117,8 @@ class MockPlayer(QObject):
             a = subprocess.run(["playerctl", "metadata", "artist"], capture_output=True, text=True).stdout.strip()
             art = subprocess.run(["playerctl", "metadata", "mpris:artUrl"], capture_output=True, text=True).stdout.strip()
             st = subprocess.run(["playerctl", "status"], capture_output=True, text=True).stdout.strip()
-
             l_raw = subprocess.run(["playerctl", "metadata", "mpris:length"], capture_output=True, text=True).stdout.strip()
             length = float(l_raw) / 1000000.0 if l_raw.isdigit() else self._length
-
             p_raw = subprocess.run(["playerctl", "position"], capture_output=True, text=True).stdout.strip()
             pos = float(p_raw) if p_raw.replace('.', '', 1).isdigit() else self._position
 
@@ -178,39 +175,199 @@ class MockMpris(QObject):
     @pyqtProperty(list, notify=changed)
     def players(self): return [self._ctrl.activePlayer]
 
-class MockTheme(QObject):
+class SysTheme(QObject):
     themeChanged = pyqtSignal()
-    def __init__(self, parent=None): super().__init__(parent)
+    availableThemesChanged = pyqtSignal()
+    currentThemeChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.colors = {}
+        self.last_mtimes = {}
+        self.theme_paths = {}
+        self._availableThemes = []
+
+        self.prefs_file = Path.home() / ".config" / "music-standalone-app" / "saved_theme.txt"
+        self._currentTheme = "Auto (kdeglobals)"
+
+        self.load_installed_themes()
+
+        if self.prefs_file.exists():
+            try:
+                saved_theme = self.prefs_file.read_text(encoding='utf-8').strip()
+                if saved_theme in self._availableThemes:
+                    self._currentTheme = saved_theme
+            except Exception:
+                pass
+
+        self.update_colors()
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.check_files)
+        self.timer.start(1500)
+
+    def load_installed_themes(self):
+        self.theme_paths = {"Auto (kdeglobals)": None}
+        self._availableThemes = ["Auto (kdeglobals)"]
+
+        dirs_to_check = [
+            Path("/usr/share/color-schemes"),
+            Path.home() / ".local" / "share" / "color-schemes"
+        ]
+
+        for d in dirs_to_check:
+            if d.exists():
+                for f in d.glob("*.colors"):
+                    name = f.stem
+                    try:
+                        with open(f, 'r', encoding='utf-8') as file:
+                            for line in file:
+                                if line.startswith("Name="):
+                                    name = line.split("=", 1)[1].strip()
+                                    break
+                    except: pass
+
+                    if name not in self.theme_paths:
+                        self._availableThemes.append(name)
+                        self.theme_paths[name] = f
+
+        auto_item = self._availableThemes.pop(0)
+        self._availableThemes.sort()
+        self._availableThemes.insert(0, auto_item)
+        self.availableThemesChanged.emit()
+
+    @pyqtProperty(list, notify=availableThemesChanged)
+    def availableThemes(self):
+        return self._availableThemes
+
+    @pyqtProperty(str, notify=currentThemeChanged)
+    def currentTheme(self):
+        return self._currentTheme
+
+    @pyqtSlot(str)
+    def setTheme(self, theme_name):
+        if theme_name in self._availableThemes:
+            self._currentTheme = theme_name
+            self.currentThemeChanged.emit()
+
+            try:
+                self.prefs_file.parent.mkdir(parents=True, exist_ok=True)
+                self.prefs_file.write_text(theme_name, encoding='utf-8')
+            except Exception:
+                pass
+
+            self.update_colors()
+
+    def rgb_to_hex(self, rgb_str):
+        try:
+            r, g, b = map(int, rgb_str.split(','))
+            return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+        except:
+            return None
+
+    def check_files(self):
+        target = None
+        if self._currentTheme == "Auto (kdeglobals)":
+            target = Path.home() / ".config" / "kdeglobals"
+        else:
+            target = self.theme_paths.get(self._currentTheme)
+
+        if target and target.exists():
+            mtime = os.path.getmtime(target)
+            if self.last_mtimes.get(str(target)) != mtime:
+                self.last_mtimes[str(target)] = mtime
+                self.update_colors()
+
+    def update_colors(self):
+        target = None
+        if self._currentTheme == "Auto (kdeglobals)":
+            target = Path.home() / ".config" / "kdeglobals"
+        else:
+            target = self.theme_paths.get(self._currentTheme)
+
+        if target and target.exists():
+            try:
+                kde_data = {}
+                current_section = ""
+                with open(target, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("[") and line.endswith("]"):
+                            current_section = line[1:-1]
+                        elif "=" in line:
+                            key, val = line.split("=", 1)
+                            if current_section not in kde_data:
+                                kde_data[current_section] = {}
+                            kde_data[current_section][key.strip()] = val.strip()
+
+                window_bg = self.rgb_to_hex(kde_data.get("Colors:Window", {}).get("BackgroundNormal", ""))
+                window_fg = self.rgb_to_hex(kde_data.get("Colors:Window", {}).get("ForegroundNormal", ""))
+                accent = self.rgb_to_hex(kde_data.get("Colors:Selection", {}).get("BackgroundNormal", ""))
+                button_bg = self.rgb_to_hex(kde_data.get("Colors:Button", {}).get("BackgroundNormal", ""))
+
+                if window_bg and window_fg and accent:
+                    self.colors["base"] = window_bg
+                    self.colors["crust"] = window_bg
+                    self.colors["mantle"] = window_bg
+                    self.colors["surface0"] = button_bg or window_bg
+                    self.colors["surface1"] = button_bg or window_bg
+                    self.colors["surface2"] = button_bg or window_bg
+
+                    self.colors["text"] = window_fg
+                    self.colors["subtext0"] = window_fg
+                    self.colors["overlay0"] = window_fg
+                    self.colors["overlay1"] = window_fg
+
+                    self.colors["mauve"] = accent
+                    self.colors["blue"] = accent
+                    self.colors["pink"] = accent
+                    self.colors["lavender"] = accent
+                    self.colors["red"] = accent
+
+                    self.themeChanged.emit()
+                    return
+            except Exception:
+                pass
+
+        # Дефолтная резервная палитра
+        self.colors = {
+            "base": "#1e1e2e", "crust": "#11111b", "mantle": "#181825",
+            "surface0": "#313244", "surface1": "#45475a", "surface2": "#585b70",
+            "text": "#cdd6f4", "subtext0": "#a6adc8", "overlay0": "#6c7086", "overlay1": "#7f849c",
+            "mauve": "#cba6f7", "blue": "#89b4fa", "red": "#f38ba8", "pink": "#f5c2e7", "lavender": "#b4befe"
+        }
+        self.themeChanged.emit()
+
     @pyqtProperty(str, notify=themeChanged)
-    def base(self): return "#1e1e2e"
+    def base(self): return self.colors.get("base", "#1e1e2e")
     @pyqtProperty(str, notify=themeChanged)
-    def mauve(self): return "#cba6f7"
+    def mauve(self): return self.colors.get("mauve", "#cba6f7")
     @pyqtProperty(str, notify=themeChanged)
-    def blue(self): return "#89b4fa"
+    def blue(self): return self.colors.get("blue", "#89b4fa")
     @pyqtProperty(str, notify=themeChanged)
-    def red(self): return "#f38ba8"
+    def red(self): return self.colors.get("red", "#f38ba8")
     @pyqtProperty(str, notify=themeChanged)
-    def text(self): return "#cdd6f4"
+    def text(self): return self.colors.get("text", "#cdd6f4")
     @pyqtProperty(str, notify=themeChanged)
-    def subtext0(self): return "#a6adc8"
+    def subtext0(self): return self.colors.get("subtext0", "#a6adc8")
     @pyqtProperty(str, notify=themeChanged)
-    def surface0(self): return "#313244"
+    def surface0(self): return self.colors.get("surface0", "#313244")
     @pyqtProperty(str, notify=themeChanged)
-    def surface1(self): return "#45475a"
+    def surface1(self): return self.colors.get("surface1", "#45475a")
     @pyqtProperty(str, notify=themeChanged)
-    def surface2(self): return "#585b70"
+    def surface2(self): return self.colors.get("surface2", "#585b70")
     @pyqtProperty(str, notify=themeChanged)
-    def crust(self): return "#11111b"
+    def crust(self): return self.colors.get("crust", "#11111b")
     @pyqtProperty(str, notify=themeChanged)
-    def mantle(self): return "#181825"
+    def mantle(self): return self.colors.get("mantle", "#181825")
     @pyqtProperty(str, notify=themeChanged)
-    def overlay0(self): return "#6c7086"
+    def overlay0(self): return self.colors.get("overlay0", "#6c7086")
     @pyqtProperty(str, notify=themeChanged)
-    def overlay1(self): return "#7f849c"
+    def overlay1(self): return self.colors.get("overlay1", "#7f849c")
     @pyqtProperty(str, notify=themeChanged)
-    def pink(self): return "#f5c2e7"
+    def pink(self): return self.colors.get("pink", "#f5c2e7")
     @pyqtProperty(str, notify=themeChanged)
-    def lavender(self): return "#b4befe"
+    def lavender(self): return self.colors.get("lavender", "#b4befe")
     @pyqtProperty(int, notify=themeChanged)
     def borderRadius(self): return 12
     @pyqtProperty(str, notify=themeChanged)
@@ -218,7 +375,7 @@ class MockTheme(QObject):
 
 class RealCava(QObject):
     levelsChanged = pyqtSignal()
-    
+
     def __init__(self, player, parent=None):
         super().__init__(parent)
         self._levels = [0.0] * 60
@@ -229,7 +386,7 @@ class RealCava(QObject):
         self.start_cava()
 
     @pyqtProperty(list, notify=levelsChanged)
-    def barLevels(self): 
+    def barLevels(self):
         return self._levels
 
     def start_cava(self):
@@ -246,14 +403,14 @@ class RealCava(QObject):
             self._thread = threading.Thread(target=self._read_cava, daemon=True)
             self._thread.start()
         except FileNotFoundError:
-            print("Cava не установлена!")
+            pass
 
     def _read_cava(self):
         while True:
             if not self._cava_proc: break
             line = self._cava_proc.stdout.readline()
             if not line: break
-            
+
             if self._active:
                 try:
                     vals = [float(x) / 100.0 for x in line.strip().split(';') if x]
@@ -267,11 +424,11 @@ class RealCava(QObject):
                 self.levelsChanged.emit()
 
     @pyqtSlot()
-    def registerConsumer(self): 
+    def registerConsumer(self):
         self._active = True
-        
+
     @pyqtSlot()
-    def unregisterConsumer(self): 
+    def unregisterConsumer(self):
         self._active = False
 
 class MockSounds(QObject):
@@ -315,15 +472,11 @@ def replace_block(text, header, replacement):
 
 def setup_app():
     BASE_DIR = Path(__file__).parent.absolute()
-    
-    # Перенаправляем запись UI-файлов во временную папку пользователя
     UI_DIR = Path.home() / ".cache" / "caelestia-equalizer" / "ui"
-    MEDIA_DIR = BASE_DIR / "media"
-
     UI_DIR.mkdir(exist_ok=True, parents=True)
 
     music_qml_path = BASE_DIR / "ui" / "MusicPopup.qml"
-    
+
     if music_qml_path.exists():
         qml_content = music_qml_path.read_text(encoding='utf-8')
         qml_content = re.sub(r'import Quickshell.*\n', '', qml_content)
@@ -333,17 +486,23 @@ def setup_app():
         qml_content = re.sub(r'onMoved:\s*val\s*=>\s*\{', 'onMoved: { let val = value;', qml_content)
         qml_content = re.sub(r'onExited:\s*\(exitCode\)\s*=>\s*destroy\(\)', 'onExited: function(exitCode) { destroy(); }', qml_content)
         qml_content = replace_block(qml_content, "function execCmd(cmdStr) {", "function execCmd(cmdStr) { SysBridge.exec_cmd(cmdStr); }\n")
+
+        qml_content = re.sub(
+            r'(id:\s*innerBg[\s\S]*?anchors\.margins:\s*root\.s\(3\))[\s\S]*?color:\s*ThemeBackend\.base',
+            r'\1\n            color: "transparent"',
+            qml_content
+        )
+
         (UI_DIR / "MusicPopup.qml").write_text(qml_content, encoding='utf-8')
 
     (UI_DIR / "StdioCollector.qml").write_text("import QtQuick\n\nQtObject {\n    property string text: \"\"\n    signal streamFinished()\n}\n")
     (UI_DIR / "Process.qml").write_text("import QtQuick\n\nItem {\n    property var command: []\n    property bool running: false\n    property var stdout: null\n    signal exited(int exitCode)\n    onRunningChanged: {\n        if(running) {\n            let res = SysBridge.exec_cmd_list(command);\n            if(stdout) { stdout.text = res; stdout.streamFinished(); }\n            running = false;\n            exited(0);\n        }\n    }\n}\n")
-    # Просто копируем файлы, если они есть в папке ui
+
     for qml_file in ["ClickButton.qml", "IconButton.qml", "Dropdown.qml", "Draggable.qml"]:
         src_file = BASE_DIR / "ui" / qml_file
         if src_file.exists():
             shutil.copy(src_file, UI_DIR / qml_file)
 
-    # Переписанный main.qml с контейнером для анимации
     (UI_DIR / "main.qml").write_text("""import QtQuick
 import QtQuick.Window
 
@@ -356,38 +515,35 @@ Window {
     maximumWidth: 600
     minimumHeight: 579
     maximumHeight: 579
-    color: "transparent" // Делаем само окно прозрачным
+    color: "transparent"
     title: "Standalone Music App"
     flags: Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
-    // Обертка, которая будет ездить вверх-вниз
     Item {
         id: mainPanel
         width: parent.width
         height: parent.height
-        y: mainWindow.height // На старте прячем внизу
+        y: mainWindow.height
 
-        // Фон интерфейса
         Rectangle {
             anchors.fill: parent
-            color: ThemeBackend.base
+            color: Qt.alpha(ThemeBackend.base, 0.65)
             radius: ThemeBackend.borderRadius
+            border.width: 1
+            border.color: Qt.alpha(ThemeBackend.text, 0.1)
         }
 
-        // Твой контент
         MusicPopup {
             anchors.fill: parent
             anchors.margins: 10
         }
 
-        // Анимация при запуске (вверх)
         NumberAnimation on y {
             to: 0
             duration: 400
             easing.type: Easing.OutBack
         }
 
-        // Анимация при закрытии (вниз)
         NumberAnimation {
             id: closeAnim
             target: mainPanel
@@ -395,11 +551,10 @@ Window {
             to: mainWindow.height
             duration: 300
             easing.type: Easing.InBack
-            onFinished: Qt.quit() // Убиваем прогу, когда анимация закончилась
+            onFinished: Qt.quit()
         }
     }
 
-    // Эта функция вызывается из питона
     function closeApp() {
         closeAnim.start()
     }
@@ -414,7 +569,7 @@ if __name__ == "__main__":
         try:
             old_pid = int(pid_file.read_text().strip())
             os.kill(old_pid, 0)
-            os.kill(old_pid, signal.SIGTERM) 
+            os.kill(old_pid, signal.SIGTERM)
             sys.exit(0)
         except OSError:
             pid_file.unlink(missing_ok=True)
@@ -445,8 +600,8 @@ if __name__ == "__main__":
         sys_bridge = SysBridge(app)
         mock_mpris_ctrl = MockMprisController(app)
         mock_mpris = MockMpris(mock_mpris_ctrl, app)
-        mock_theme = MockTheme(app)
-        mock_cava = RealCava(mock_mpris_ctrl.activePlayer, app) # Исправлено на RealCava
+        sys_theme = SysTheme(app)
+        real_cava = RealCava(mock_mpris_ctrl.activePlayer, app)
         mock_sounds = MockSounds(app)
         mock_i18n = MockI18n(app)
         mock_scaler = MockScaler(app)
@@ -456,8 +611,6 @@ if __name__ == "__main__":
         mpris_timer.timeout.connect(mock_mpris_ctrl.activePlayer.fetch_data)
         mpris_timer.start(1000)
 
-        # cava_timer полностью удаляем, так как RealCava работает в отдельном потоке
-
         save_timer = QTimer(app)
         save_timer.timeout.connect(sys_bridge.save_hyprland_position)
         save_timer.start(2000)
@@ -465,8 +618,8 @@ if __name__ == "__main__":
         engine.rootContext().setContextProperty("SysBridge", sys_bridge)
         engine.rootContext().setContextProperty("MprisController", mock_mpris_ctrl)
         engine.rootContext().setContextProperty("Mpris", mock_mpris)
-        engine.rootContext().setContextProperty("ThemeBackend", mock_theme)
-        engine.rootContext().setContextProperty("Cava", mock_cava)
+        engine.rootContext().setContextProperty("ThemeBackend", sys_theme)
+        engine.rootContext().setContextProperty("Cava", real_cava)
         engine.rootContext().setContextProperty("Sounds", mock_sounds)
         engine.rootContext().setContextProperty("I18n", mock_i18n)
         engine.rootContext().setContextProperty("Scaler", mock_scaler)
@@ -478,24 +631,21 @@ if __name__ == "__main__":
         if not engine.rootObjects():
             sys.exit(-1)
 
-        # Функция для активации QML-анимации
         def trigger_qml_close():
             root_obj = engine.rootObjects()[0]
             QMetaObject.invokeMethod(root_obj, "closeApp")
 
-        # Обработчик сигнала
         def sigterm_handler(signum, frame):
             QTimer.singleShot(0, trigger_qml_close)
 
         signal.signal(signal.SIGTERM, sigterm_handler)
 
-        # Чтобы питон не спал и мог перехватывать системные сигналы
         sig_timer = QTimer(app)
         sig_timer.timeout.connect(lambda: None)
         sig_timer.start(200)
 
         sys.exit(app.exec())
-        
+
     finally:
         if pid_file.exists():
             pid_file.unlink(missing_ok=True)
